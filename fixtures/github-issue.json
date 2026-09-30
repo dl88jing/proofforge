@@ -1,0 +1,9 @@
+{
+  "html_url": "https://github.com/solana-foundation/solana-web3.js/issues/1",
+  "number": 1,
+  "title": "Update airdrop return type",
+  "body": "Recorded public snapshot used when the GitHub API is unavailable.\n\n## Acceptance criteria\n- [ ] Restate the issue as a bounded local evidence mission\n- [ ] Hash the source snapshot\n- [ ] Produce a Proof Pack a maintainer can review\n- [ ] Do not post back to GitHub\n\nThis fixture is a public-issue fallback for the Northbridge ProofForge demo, not seeded database rows.",
+  "state": "closed",
+  "labels": [{ "name": "docs" }, { "name": "good first issue" }],
+  "user": { "login": "mvines" }
+}
