@@ -6,11 +6,12 @@ import { runProofNode } from "@/lib/proof/runner";
 import { verifyRun } from "@/lib/proof/verifier";
 import { buildProofPack, markPublicProof } from "@/lib/proof/pack";
 import { grantAcceptedCredit, recordRejection, recordSettlement } from "@/lib/credit/reputation";
-import { sendProofSettlement } from "@/lib/solana/settle";
+import { sendProofSettlement, settleOptions } from "@/lib/solana/settle";
 import { explorerTxUrl } from "@/lib/solana/keys";
 import { appendEvent } from "@/lib/events/chain";
 import { newId, nowIso } from "@/lib/ids";
-import { getDb } from "@/lib/db/client";
+import { defaultSettleMode } from "@/lib/config";
+import type { SettleMode } from "@/lib/types";
 import {
   getMission,
   getPack,
@@ -32,6 +33,7 @@ import {
   parsePack,
   toSettlementRecord,
   updateMissionStatus,
+  updatePackPublicJson,
   updateSettlement,
   type MissionRow,
 } from "@/lib/db/queries";
@@ -205,10 +207,7 @@ export function reviewMission(
       accepted: true,
       credit: 25,
     });
-    packRow.public_json = JSON.stringify(nextPublic);
-    getDb()
-      .prepare("UPDATE proof_packs SET public_json = ? WHERE id = ?")
-      .run(packRow.public_json, packRow.id);
+    updatePackPublicJson(packRow.id, JSON.stringify(nextPublic));
     appendEvent("review.accepted", missionId, {
       reviewer,
       packId: packRow.id,
@@ -227,7 +226,7 @@ export function reviewMission(
   return assembleMission(missionId);
 }
 
-export async function settleMission(missionId: string) {
+export async function settleMission(missionId: string, mode: SettleMode = defaultSettleMode()) {
   const mission = requireMission(missionId);
   if (mission.status !== "accepted") {
     throw new Error("Settle only runs after Avery accepts the Proof Pack.");
@@ -238,6 +237,11 @@ export async function settleMission(missionId: string) {
   }
   const packRow = latestPack(missionId);
   if (!packRow) throw new Error("No Proof Pack to settle.");
+  if (mode === "live" && !settleOptions().liveReady) {
+    throw new Error(
+      "Live settle needs a funded payer. Set SOLANA_PAYER_SECRET or run `npm run devnet:setup`."
+    );
+  }
   const memo = `northbridge:${packRow.digest}`;
   const settlementId = newId("stl");
   insertSettlement({
@@ -258,10 +262,10 @@ export async function settleMission(missionId: string) {
     created_at: nowIso(),
     confirmed_at: null,
   });
-  appendEvent("settle.submitted", missionId, { settlementId, memo });
+  appendEvent("settle.submitted", missionId, { settlementId, memo, mode });
 
   try {
-    const result = await sendProofSettlement(memo);
+    const result = await sendProofSettlement(memo, mode);
     updateSettlement(settlementId, {
       signature: result.signature,
       slot: result.slot,
@@ -271,31 +275,22 @@ export async function settleMission(missionId: string) {
         payee: result.payee,
         lamports: result.lamports,
         serializedTx: result.serializedTx,
-        explorer: explorerTxUrl(result.cluster, result.signature),
+        explorer: explorerTxUrl(result.cluster, result.signature, result.rpcUrl),
       }),
       confirmed_at: nowIso(),
+      cluster: result.cluster,
+      rpc_url: result.rpcUrl,
+      payer_pubkey: result.payer,
+      payee_pubkey: result.payee,
+      lamports: result.lamports,
     });
-    getDb()
-      .prepare(
-        "UPDATE settlements SET cluster = ?, rpc_url = ?, payer_pubkey = ?, payee_pubkey = ?, lamports = ? WHERE id = ?"
-      )
-      .run(
-        result.cluster,
-        result.rpcUrl,
-        result.payer,
-        result.payee,
-        result.lamports,
-        settlementId
-      );
     const { publicProof } = parsePack(packRow);
     const nextPublic = markPublicProof(publicProof, {
       settled: true,
       settlementSignature: result.signature,
       cluster: result.cluster,
     });
-    getDb()
-      .prepare("UPDATE proof_packs SET public_json = ? WHERE id = ?")
-      .run(JSON.stringify(nextPublic), packRow.id);
+    updatePackPublicJson(packRow.id, JSON.stringify(nextPublic));
     updateMissionStatus(missionId, "settled");
     recordSettlement();
     appendEvent("settle.confirmed", missionId, {

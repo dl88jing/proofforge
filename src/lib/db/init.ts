@@ -1,1 +1,0 @@
-export { initDb } from "./client";

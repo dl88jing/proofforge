@@ -1,6 +1,5 @@
-import { existsSync, readFileSync } from "node:fs";
-import path from "node:path";
-import { githubToken, repoRoot } from "@/lib/config";
+import fixtureIssue from "../../../fixtures/github-issue.json";
+import { githubToken } from "@/lib/config";
 import { nowIso } from "@/lib/ids";
 import type { GithubSource, SourceKind } from "@/lib/types";
 
@@ -67,11 +66,8 @@ function toSource(
 }
 
 function loadFixture(): GithubIssuePayload {
-  const fixturePath = path.join(repoRoot(), "fixtures/github-issue.json");
-  if (!existsSync(fixturePath)) {
-    throw new Error("GitHub fetch failed and no offline fixture is present.");
-  }
-  return JSON.parse(readFileSync(fixturePath, "utf8")) as GithubIssuePayload;
+  // Bundled at build time so the offline fallback also works on serverless deploys.
+  return structuredClone(fixtureIssue) as GithubIssuePayload;
 }
 
 export async function fetchGithubSource(url: string): Promise<GithubSource> {

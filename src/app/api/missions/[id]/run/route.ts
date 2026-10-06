@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { runMissionProof } from "@/lib/pipeline";
+import { withStore } from "@/lib/store";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -10,7 +11,7 @@ export async function POST(
 ) {
   try {
     const { id } = await params;
-    return NextResponse.json(runMissionProof(id));
+    return NextResponse.json(await withStore(() => runMissionProof(id)));
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     return NextResponse.json({ error: message }, { status: 400 });

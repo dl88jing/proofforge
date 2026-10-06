@@ -89,10 +89,11 @@ export function buildProofPack(input: {
     createdAt,
   };
 
-  mkdirSync(packsDir(), { recursive: true });
+  mkdirSync(/*turbopackIgnore: true*/ packsDir(), { recursive: true });
   const filePath = path.join(packsDir(), `${pack.packId}.json`);
-  writeFileSync(filePath, JSON.stringify(pack, null, 2), "utf8");
+  writeFileSync(/*turbopackIgnore: true*/ filePath, JSON.stringify(pack, null, 2), "utf8");
   writeFileSync(
+    /*turbopackIgnore: true*/
     path.join(packsDir(), `${pack.packId}.public.json`),
     JSON.stringify(publicProof, null, 2),
     "utf8"

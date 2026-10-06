@@ -1,9 +1,11 @@
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { ledgerSnapshot } from "@/lib/pipeline";
+import { hydrateStore } from "@/lib/store";
 
 export const dynamic = "force-dynamic";
 
-export default function LedgerPage() {
+export default async function LedgerPage() {
+  await hydrateStore();
   const ledger = ledgerSnapshot();
   return (
     <div className="space-y-6">

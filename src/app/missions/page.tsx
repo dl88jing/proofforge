@@ -3,11 +3,15 @@ import { StatusBadge } from "@/components/status-badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { listMissionSummaries } from "@/lib/pipeline";
+import { hydrateStore, storeInfo } from "@/lib/store";
+import { ResetDemoButton } from "@/components/reset-demo";
 
 export const dynamic = "force-dynamic";
 
-export default function MissionsPage() {
+export default async function MissionsPage() {
+  await hydrateStore();
   const missions = listMissionSummaries();
+  const store = storeInfo();
   return (
     <div className="space-y-6">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
@@ -17,8 +21,15 @@ export default function MissionsPage() {
           <p className="mt-2 text-muted-foreground">
             Each row is a bounded source. Run, pack, accept, then settle — in that order.
           </p>
+          <p className="mt-1 text-xs text-muted-foreground">
+            Store: {store.backend}
+            {store.durable ? "" : " (per-instance demo memory — add Upstash Redis for durable state)"}
+          </p>
         </div>
-        <Button render={<Link href="/intake" />}>New intake</Button>
+        <div className="flex gap-2">
+          {missions.length > 0 ? <ResetDemoButton /> : null}
+          <Button render={<Link href="/intake" />}>New intake</Button>
+        </div>
       </div>
       {missions.length === 0 ? (
         <Card>
