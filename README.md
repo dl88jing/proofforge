@@ -6,7 +6,7 @@
 
 | | |
 | --- | --- |
-| **Live demo** | `https://<your-deployment>.vercel.app` — _placeholder until the Vercel deploy is claimed (see [DEPLOY.md](DEPLOY.md))_ |
+| **Live demo** | https://proofforge-push.vercel.app |
 | **Hackathon** | [Colosseum Crypto World's Fair](https://www.colosseum.com/hackathon) · Solana track · final submit **Mon 12 Oct 2026, 11:59 PM PT** |
 | **Arena** | https://colosseum.com/arena/projects/proofforge |
 | **Run it in 60 s** | `npm install && npm run demo` — no keys, no database, no network required |

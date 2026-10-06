@@ -16,5 +16,5 @@ Settlement happens on Solana after a human accept gate: the maintainer's treasur
 
 **Links**
 - GitHub: https://github.com/dl88jing/proofforge
-- Live demo: _fill with Vercel URL after deploy_
+- Live demo: https://proofforge-push.vercel.app
 - Demo video / pitch video: _fill after upload_
