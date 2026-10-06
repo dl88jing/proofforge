@@ -23,7 +23,22 @@ const STEPS = [
   },
   {
     title: "Solana settle",
-    body: "After accept, a real transfer+memo transaction is signed and sent on the mock RPC or Solana devnet/testnet.",
+    body: "After accept, Avery's treasury signs a System Program transfer + Memo of the pack digest — mock cluster or live Solana devnet.",
+  },
+];
+
+const PILLARS = [
+  {
+    title: "Agents spend. Humans authorize.",
+    body: "Morgan (the runner) can produce evidence all day. Only Avery's accept gate unlocks credit, and only an accepted pack can move lamports.",
+  },
+  {
+    title: "The chain points at verified work.",
+    body: "Every payout memo is northbridge:<sha256 of the Proof Pack>. Anyone can recompute the digest and read the tx back — the public proof page does it in one click.",
+  },
+  {
+    title: "Serverless, keyless demo.",
+    body: "No database to provision. The mock cluster uses the exact web3.js transaction path as devnet, so judges can play the whole loop in under a minute.",
   },
 ];
 
@@ -54,7 +69,8 @@ export default function HomePage() {
           <CardHeader>
             <CardTitle>Try the loop</CardTitle>
             <CardDescription>
-              Default URL is a public Solana web3.js issue. Swap in any public GitHub issue.
+              Bound the default Solana web3.js issue, then hit <strong>Autopilot</strong> on the mission
+              page to watch Morgan → verifier → Avery → Solana settle → on-chain verify.
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -71,6 +87,17 @@ export default function HomePage() {
               <CardTitle>{step.title}</CardTitle>
             </CardHeader>
             <CardContent className="text-muted-foreground">{step.body}</CardContent>
+          </Card>
+        ))}
+      </section>
+
+      <section className="grid gap-4 md:grid-cols-3">
+        {PILLARS.map((pillar) => (
+          <Card key={pillar.title}>
+            <CardHeader>
+              <CardTitle>{pillar.title}</CardTitle>
+            </CardHeader>
+            <CardContent className="text-sm text-muted-foreground">{pillar.body}</CardContent>
           </Card>
         ))}
       </section>

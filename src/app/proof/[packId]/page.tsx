@@ -3,6 +3,9 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Badge } from "@/components/ui/badge";
 import { publicPack } from "@/lib/pipeline";
 import { HOUSEHOLD } from "@/lib/household";
+import { OnchainVerify } from "@/components/onchain-verify";
+import { hydrateStore } from "@/lib/store";
+import { settlementForPack, toSettlementRecord } from "@/lib/db/queries";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -13,8 +16,11 @@ export default async function PublicProofPage({
   params: Promise<{ packId: string }>;
 }) {
   const { packId } = await params;
+  await hydrateStore();
   const proof = publicPack(packId);
   if (!proof) notFound();
+  const settlementRow = settlementForPack(packId);
+  const settlement = settlementRow ? toSettlementRecord(settlementRow) : null;
 
   return (
     <div className="mx-auto max-w-2xl space-y-6">
@@ -55,6 +61,32 @@ export default async function PublicProofPage({
               {proof.cluster} signature {proof.settlementSignature}
             </p>
           ) : null}
+          {settlement ? (
+            <p className="break-all font-mono text-[11px] text-muted-foreground">
+              memo {settlement.memo} · {settlement.lamports.toLocaleString()} lamports
+            </p>
+          ) : null}
+          <p className="text-xs">
+            <a className="underline" href={`/api/proof/${packId}`}>
+              Public proof JSON
+            </a>{" "}
+            ·{" "}
+            <a className="underline" href={`/api/proof/${packId}/verify`}>
+              Verification JSON
+            </a>
+          </p>
+        </CardContent>
+      </Card>
+      <Card>
+        <CardHeader>
+          <CardTitle>Don&apos;t trust the badge — verify it</CardTitle>
+          <CardDescription>
+            Recomputes the canonical SHA-256 of the sealed pack, reads the settle transaction back
+            from Solana, and checks that its memo commits to exactly this digest.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <OnchainVerify packId={packId} autoRun={proof.settled} />
         </CardContent>
       </Card>
     </div>

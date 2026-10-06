@@ -2,7 +2,9 @@
 
 import Link from "next/link";
 import { useMemo, useState } from "react";
+import { Bot, Radio, Zap } from "lucide-react";
 import { toast } from "sonner";
+import { OnchainVerify } from "@/components/onchain-verify";
 import { OperatorSwitch, useOperator } from "@/components/operator-switch";
 import { PipelineStepper } from "@/components/pipeline-stepper";
 import { StatusBadge } from "@/components/status-badge";
@@ -11,7 +13,19 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { HOUSEHOLD } from "@/lib/household";
-import type { MissionStatus, ProofPack, PublicProof, SettlementRecord } from "@/lib/types";
+import type { MissionStatus, ProofPack, PublicProof, SettleMode, SettlementRecord } from "@/lib/types";
+import { cn } from "@/lib/utils";
+
+export type SettleOptionsView = {
+  defaultMode: SettleMode;
+  liveCluster: string;
+  liveRpcUrl: string;
+  liveReady: boolean;
+  livePayer: string | null;
+  mockPayer: string;
+  payee: string;
+  lamports: number;
+};
 
 type EventView = {
   seq: number;
@@ -58,14 +72,26 @@ type MissionDetail = {
   events: EventView[];
 };
 
-export function MissionWorkbench({ initial }: { initial: MissionDetail }) {
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+export function MissionWorkbench({
+  initial,
+  settle,
+}: {
+  initial: MissionDetail;
+  settle: SettleOptionsView;
+}) {
   const [detail, setDetail] = useState(initial);
   const [note, setNote] = useState("The work holds. Credit Morgan and settle on Solana.");
   const [pending, setPending] = useState<string | null>(null);
-  const [operator] = useOperator();
+  const [autopilot, setAutopilot] = useState<string | null>(null);
+  const [mode, setMode] = useState<SettleMode>(
+    settle.defaultMode === "live" && settle.liveReady ? "live" : "mock"
+  );
+  const [operator, setOperator] = useOperator();
   const status = detail.mission.status;
 
-  async function act(path: string, body?: unknown) {
+  async function act(path: string, body?: unknown, quiet = false): Promise<MissionDetail | null> {
     setPending(path);
     try {
       const response = await fetch(path, {
@@ -76,11 +102,52 @@ export function MissionWorkbench({ initial }: { initial: MissionDetail }) {
       const data = await response.json();
       if (!response.ok) throw new Error(data.error ?? "Request failed");
       setDetail(data);
-      toast.success("Mission updated.");
+      if (!quiet) toast.success(successMessage(data as MissionDetail));
+      return data as MissionDetail;
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Request failed");
+      return null;
     } finally {
       setPending(null);
+    }
+  }
+
+  const base = `/api/missions/${detail.mission.id}`;
+
+  /** One-click judge path: plays every remaining human/agent step with visible hand-offs. */
+  async function runAutopilot() {
+    let current: MissionDetail | null = detail;
+    const step = async (label: string, who: "morgan" | "avery", path: string, body?: unknown) => {
+      setAutopilot(label);
+      setOperator(who);
+      await sleep(700);
+      current = await act(path, body, true);
+      if (current) toast.success(label);
+      await sleep(500);
+    };
+    try {
+      if (current && ["bounded", "failed", "rejected"].includes(current.mission.status)) {
+        await step("Morgan ran the proof node · verifier sealed the pack", "morgan", `${base}/run`);
+      }
+      if (current?.mission.status === "packed") {
+        await step("Morgan submitted the Proof Pack to Avery", "morgan", `${base}/submit`);
+      }
+      if (current?.mission.status === "submitted") {
+        await step("Avery accepted · credit granted", "avery", `${base}/review`, {
+          decision: "accept",
+          note,
+        });
+      }
+      if (current?.mission.status === "accepted") {
+        await step(
+          mode === "live" ? `Avery settled on Solana ${settle.liveCluster}` : "Avery settled on the mock cluster",
+          "avery",
+          `${base}/settle`,
+          { mode }
+        );
+      }
+    } finally {
+      setAutopilot(null);
     }
   }
 
@@ -94,11 +161,8 @@ export function MissionWorkbench({ initial }: { initial: MissionDetail }) {
   }, [detail.run]);
 
   const explorer =
-    detail.settlement?.status === "confirmed" &&
-    detail.settlement.signature &&
-    (detail.settlement.cluster === "devnet" || detail.settlement.cluster === "testnet")
-      ? `https://explorer.solana.com/tx/${detail.settlement.signature}?cluster=${detail.settlement.cluster}`
-      : null;
+    detail.settlement?.status === "confirmed" ? (detail.settlement.explorer ?? null) : null;
+  const busy = pending !== null || autopilot !== null;
 
   return (
     <div className="space-y-6">
@@ -117,7 +181,18 @@ export function MissionWorkbench({ initial }: { initial: MissionDetail }) {
       </div>
 
       <PipelineStepper status={status} />
-      <OperatorSwitch />
+      <div className="flex flex-col gap-3 rounded-lg border border-border/70 bg-card/60 p-3 sm:flex-row sm:items-center sm:justify-between">
+        <OperatorSwitch />
+        {status !== "settled" ? (
+          <div className="flex items-center gap-3">
+            {autopilot ? <span className="text-xs text-muted-foreground">{autopilot}…</span> : null}
+            <Button type="button" variant="secondary" size="sm" disabled={busy} onClick={runAutopilot}>
+              <Bot className="size-3.5" />
+              {autopilot ? "Autopilot running" : "Autopilot: play the loop"}
+            </Button>
+          </div>
+        ) : null}
+      </div>
 
       <div className="grid gap-4 lg:grid-cols-[1.1fr_0.9fr]">
         <Card>
@@ -151,16 +226,16 @@ export function MissionWorkbench({ initial }: { initial: MissionDetail }) {
           <CardContent className="space-y-3">
             {status === "bounded" || status === "failed" || status === "rejected" ? (
               <Button
-                disabled={operator !== "morgan" || pending !== null}
-                onClick={() => act(`/api/missions/${detail.mission.id}/run`)}
+                disabled={operator !== "morgan" || busy}
+                onClick={() => act(`${base}/run`)}
               >
                 {pending ? "Running…" : "Run proof node"}
               </Button>
             ) : null}
             {status === "packed" ? (
               <Button
-                disabled={operator !== "morgan" || pending !== null}
-                onClick={() => act(`/api/missions/${detail.mission.id}/submit`)}
+                disabled={operator !== "morgan" || busy}
+                onClick={() => act(`${base}/submit`)}
               >
                 Submit pack to Avery
               </Button>
@@ -170,9 +245,9 @@ export function MissionWorkbench({ initial }: { initial: MissionDetail }) {
                 <Textarea value={note} onChange={(event) => setNote(event.target.value)} />
                 <div className="flex flex-wrap gap-2">
                   <Button
-                    disabled={operator !== "avery" || pending !== null}
+                    disabled={operator !== "avery" || busy}
                     onClick={() =>
-                      act(`/api/missions/${detail.mission.id}/review`, {
+                      act(`${base}/review`, {
                         decision: "accept",
                         note,
                       })
@@ -182,9 +257,9 @@ export function MissionWorkbench({ initial }: { initial: MissionDetail }) {
                   </Button>
                   <Button
                     variant="destructive"
-                    disabled={operator !== "avery" || pending !== null}
+                    disabled={operator !== "avery" || busy}
                     onClick={() =>
-                      act(`/api/missions/${detail.mission.id}/review`, {
+                      act(`${base}/review`, {
                         decision: "reject",
                         note,
                       })
@@ -198,22 +273,45 @@ export function MissionWorkbench({ initial }: { initial: MissionDetail }) {
                 ) : null}
               </div>
             ) : null}
+            {status === "accepted" || status === "submitted" ? (
+              <SettleModeToggle mode={mode} onChange={setMode} settle={settle} disabled={busy} />
+            ) : null}
             {status === "accepted" ? (
               <Button
-                disabled={operator !== "avery" || pending !== null}
-                onClick={() => act(`/api/missions/${detail.mission.id}/settle`)}
+                disabled={operator !== "avery" || busy}
+                onClick={() => act(`${base}/settle`, { mode })}
               >
-                {pending ? "Settling…" : "Settle on Solana"}
+                {mode === "live" ? <Radio className="size-3.5" /> : <Zap className="size-3.5" />}
+                {pending
+                  ? mode === "live"
+                    ? `Confirming on ${settle.liveCluster}…`
+                    : "Settling…"
+                  : mode === "live"
+                    ? `Settle on Solana ${settle.liveCluster}`
+                    : "Settle on mock cluster"}
               </Button>
             ) : null}
+            {detail.settlement?.status === "failed" && status === "accepted" ? (
+              <p className="text-xs text-destructive">Last settle failed: {detail.settlement.error}</p>
+            ) : null}
             {status === "settled" && detail.settlement?.signature ? (
-              <div className="space-y-1 text-sm">
-                <p className="font-medium text-proof">Settled {detail.settlement.lamports} lamports</p>
+              <div className="space-y-2 rounded-md border border-proof/40 bg-proof/5 p-3 text-sm">
+                <p className="font-medium text-proof">
+                  Settled {detail.settlement.lamports.toLocaleString()} lamports ·{" "}
+                  {detail.settlement.cluster === "mock" ? "mock cluster" : `Solana ${detail.settlement.cluster}`}
+                </p>
                 <p className="break-all font-mono text-xs">{detail.settlement.signature}</p>
                 <p className="text-xs text-muted-foreground">
-                  {detail.settlement.cluster} · {detail.settlement.payerPubkey.slice(0, 8)}… →{" "}
-                  {detail.settlement.payeePubkey.slice(0, 8)}…
+                  Avery treasury {detail.settlement.payerPubkey.slice(0, 8)}… → Morgan{" "}
+                  {detail.settlement.payeePubkey.slice(0, 8)}… · slot {detail.settlement.slot ?? "?"}
                 </p>
+                <p className="break-all font-mono text-[11px] text-muted-foreground">memo {detail.settlement.memo}</p>
+                {explorer ? (
+                  <a className="text-xs underline" href={explorer} target="_blank" rel="noreferrer">
+                    Solana Explorer ↗
+                  </a>
+                ) : null}
+                {detail.pack ? <OnchainVerify packId={detail.pack.packId} autoRun /> : null}
               </div>
             ) : null}
             {detail.pack ? (
@@ -340,14 +438,80 @@ export function MissionWorkbench({ initial }: { initial: MissionDetail }) {
           </Card>
         </TabsContent>
       </Tabs>
-      {explorer ? (
-        <p className="text-sm">
-          Explorer:{" "}
-          <a className="underline" href={explorer} target="_blank" rel="noreferrer">
-            {explorer}
-          </a>
-        </p>
-      ) : null}
+    </div>
+  );
+}
+
+function successMessage(data: MissionDetail): string {
+  switch (data.mission.status) {
+    case "packed":
+      return "Verifier passed. Proof Pack sealed.";
+    case "failed":
+      return "Verifier failed. No pack sealed.";
+    case "submitted":
+      return "Pack submitted. Waiting on Avery.";
+    case "accepted":
+      return "Avery accepted. Credit granted.";
+    case "rejected":
+      return "Avery rejected. No credit.";
+    case "settled":
+      return `Settled on ${data.settlement?.cluster === "mock" ? "the mock cluster" : `Solana ${data.settlement?.cluster}`}.`;
+    default:
+      return "Mission updated.";
+  }
+}
+
+function SettleModeToggle({
+  mode,
+  onChange,
+  settle,
+  disabled,
+}: {
+  mode: SettleMode;
+  onChange: (mode: SettleMode) => void;
+  settle: SettleOptionsView;
+  disabled: boolean;
+}) {
+  const options: { id: SettleMode; title: string; body: string; enabled: boolean }[] = [
+    {
+      id: "mock",
+      title: "Mock cluster",
+      body: "In-process JSON-RPC. Same web3.js tx, signatures verified, no network.",
+      enabled: true,
+    },
+    {
+      id: "live",
+      title: `Solana ${settle.liveCluster}`,
+      body: settle.liveReady
+        ? `Live RPC · payer ${settle.livePayer?.slice(0, 6)}…`
+        : "Set SOLANA_PAYER_SECRET (funded devnet key) to enable.",
+      enabled: settle.liveReady,
+    },
+  ];
+  return (
+    <div className="space-y-1.5">
+      <p className="text-xs uppercase tracking-[0.16em] text-muted-foreground">Settle target</p>
+      <div className="grid grid-cols-2 gap-2" role="radiogroup">
+        {options.map((option) => (
+          <button
+            key={option.id}
+            type="button"
+            role="radio"
+            aria-checked={mode === option.id}
+            disabled={disabled || !option.enabled}
+            onClick={() => onChange(option.id)}
+            className={cn(
+              "rounded-md border p-2 text-left text-xs transition-colors disabled:cursor-not-allowed disabled:opacity-50",
+              mode === option.id
+                ? "border-primary/60 bg-primary/10"
+                : "border-border hover:bg-muted"
+            )}
+          >
+            <span className="block font-medium text-foreground">{option.title}</span>
+            <span className="block text-muted-foreground">{option.body}</span>
+          </button>
+        ))}
+      </div>
     </div>
   );
 }
