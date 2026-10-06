@@ -35,7 +35,7 @@ function timed<T>(cmd: string, fn: () => T): { result: T; command: CommandResult
 
 function writeArtifact(dir: string, name: string, contents: string): ArtifactRecord {
   const filePath = path.join(dir, name);
-  writeFileSync(filePath, contents, "utf8");
+  writeFileSync(/*turbopackIgnore: true*/ filePath, contents, "utf8");
   const buf = Buffer.from(contents, "utf8");
   return {
     name,
@@ -76,7 +76,7 @@ export function runProofNode(input: {
 }): RunnerOutput {
   const startedAt = nowIso();
   const dir = path.join(artifactsDir(), input.runId);
-  mkdirSync(dir, { recursive: true });
+  mkdirSync(/*turbopackIgnore: true*/ dir, { recursive: true });
   const commands: CommandResult[] = [];
   const logLines: string[] = [
     `proof-node ${HOUSEHOLD.nodeId}`,

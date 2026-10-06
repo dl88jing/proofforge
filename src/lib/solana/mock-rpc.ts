@@ -4,10 +4,8 @@ import {
   VersionedTransaction,
 } from "@solana/web3.js";
 import bs58 from "bs58";
-import { getDb, initDb } from "@/lib/db/client";
+import { getStore, touchStore } from "@/lib/store";
 import { nowIso } from "@/lib/ids";
-
-initDb();
 
 const LAMPORTS_PER_SOL = 1_000_000_000;
 const GENESIS = "northbridge-mock-genesis";
@@ -27,18 +25,29 @@ type RpcResponse = {
 };
 
 function metaGet(key: string, fallback: string): string {
-  const row = getDb()
-    .prepare("SELECT v FROM solana_mock_meta WHERE k = ?")
-    .get(key) as { v: string } | undefined;
-  return row?.v ?? fallback;
+  return getStore().mockMeta[key] ?? fallback;
 }
 
 function metaSet(key: string, value: string): void {
-  getDb()
-    .prepare(
-      "INSERT INTO solana_mock_meta (k, v) VALUES (?, ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v"
-    )
-    .run(key, value);
+  getStore().mockMeta[key] = value;
+  touchStore();
+}
+
+function recordSig(signature: string, slotNo: number, rawTx: string | null): void {
+  getStore().mockSigs[signature] = {
+    slot: slotNo,
+    status: "confirmed",
+    err: null,
+    raw_tx: rawTx,
+    created_at: nowIso(),
+  };
+  touchStore();
+}
+
+/** Raw base64 transaction the mock cluster accepted for this signature. */
+export function mockRawTransaction(signature: string): { slot: number; rawTx: string } | null {
+  const row = getStore().mockSigs[signature];
+  return row?.raw_tx ? { slot: row.slot, rawTx: row.raw_tx } : null;
 }
 
 function slot(): number {
@@ -66,45 +75,51 @@ function ensureBlockhash(): { blockhash: string; lastValidBlockHeight: number } 
 }
 
 export function mockAirdrop(pubkey: string, lamports: number): void {
-  const db = getDb();
-  const row = db
-    .prepare("SELECT lamports FROM solana_mock_accounts WHERE pubkey = ?")
-    .get(pubkey) as { lamports: number } | undefined;
-  const next = (row?.lamports ?? 0) + lamports;
-  db.prepare(
-    "INSERT INTO solana_mock_accounts (pubkey, lamports) VALUES (?, ?) ON CONFLICT(pubkey) DO UPDATE SET lamports = excluded.lamports"
-  ).run(pubkey, next);
+  const accounts = getStore().mockAccounts;
+  accounts[pubkey] = (accounts[pubkey] ?? 0) + lamports;
+  touchStore();
 }
 
-function getLamports(pubkey: string): number {
-  const row = getDb()
-    .prepare("SELECT lamports FROM solana_mock_accounts WHERE pubkey = ?")
-    .get(pubkey) as { lamports: number } | undefined;
-  return row?.lamports ?? 0;
+export function getLamports(pubkey: string): number {
+  return getStore().mockAccounts[pubkey] ?? 0;
 }
 
-function applyLegacyTransfer(raw: Buffer): void {
+/**
+ * Validate and apply a legacy transaction like a (tiny) real cluster would:
+ * every required signature must verify, the blockhash must be one we issued,
+ * and System Program transfers must be funded. Returns an error string or null.
+ */
+function applyLegacyTransfer(raw: Buffer): string | null {
+  let tx: Transaction;
   try {
-    const tx = Transaction.from(raw);
-    for (const ix of tx.instructions) {
-      if (ix.programId.equals(PublicKey.default) && ix.data.length >= 12) {
-        const opcode = ix.data.readUInt32LE(0);
-        if (opcode === 2 && ix.keys.length >= 2) {
-          const lamports = Number(ix.data.readBigUInt64LE(4));
-          const from = ix.keys[0].pubkey.toBase58();
-          const to = ix.keys[1].pubkey.toBase58();
-          const fromBal = getLamports(from);
-          if (fromBal < lamports) {
-            throw new Error("insufficient mock lamports");
-          }
-          mockAirdrop(from, -lamports);
-          mockAirdrop(to, lamports);
-        }
+    tx = Transaction.from(raw);
+  } catch {
+    return null; // Versioned tx: accept signature without balance effects.
+  }
+  if (!tx.verifySignatures()) return "signature verification failed";
+  if (tx.recentBlockhash && tx.recentBlockhash !== metaGet("blockhash", "")) {
+    return "blockhash not found";
+  }
+  const fee = 5000 * tx.signatures.length;
+  const payer = tx.feePayer?.toBase58();
+  if (payer) {
+    if (getLamports(payer) < fee) return "insufficient funds for fee";
+    mockAirdrop(payer, -fee);
+  }
+  for (const ix of tx.instructions) {
+    if (ix.programId.equals(PublicKey.default) && ix.data.length >= 12) {
+      const opcode = ix.data.readUInt32LE(0);
+      if (opcode === 2 && ix.keys.length >= 2) {
+        const lamports = Number(ix.data.readBigUInt64LE(4));
+        const from = ix.keys[0].pubkey.toBase58();
+        const to = ix.keys[1].pubkey.toBase58();
+        if (getLamports(from) < lamports) return "insufficient lamports for transfer";
+        mockAirdrop(from, -lamports);
+        mockAirdrop(to, lamports);
       }
     }
-  } catch {
-    // Versioned tx or unparseable transfer: still accept the signature.
   }
+  return null;
 }
 
 function signatureFromRaw(raw: Buffer): string {
@@ -201,12 +216,7 @@ function handleMethod(method: string, params: unknown, id: unknown): RpcResponse
       const [pubkey, lamports] = (params as [string, number]) ?? [];
       mockAirdrop(pubkey, lamports ?? LAMPORTS_PER_SOL);
       const sig = bs58.encode(crypto.getRandomValues(new Uint8Array(64)));
-      const currentSlot = bumpSlot();
-      getDb()
-        .prepare(
-          "INSERT INTO solana_mock_sigs (signature, slot, status, err, raw_tx, created_at) VALUES (?, ?, ?, ?, ?, ?)"
-        )
-        .run(sig, currentSlot, "confirmed", null, null, nowIso());
+      recordSig(sig, bumpSlot(), null);
       return ok(id, sig);
     }
     case "simulateTransaction":
@@ -221,25 +231,16 @@ function handleMethod(method: string, params: unknown, id: unknown): RpcResponse
         encoding === "base64"
           ? Buffer.from(encoded, "base64")
           : Buffer.from(encoded, "hex");
-      applyLegacyTransfer(raw);
+      const rejected = applyLegacyTransfer(raw);
+      if (rejected) return fail(id, `Transaction rejected by Northbridge mock cluster: ${rejected}`);
       const signature = signatureFromRaw(raw);
-      const currentSlot = bumpSlot();
-      getDb()
-        .prepare(
-          `INSERT INTO solana_mock_sigs (signature, slot, status, err, raw_tx, created_at)
-           VALUES (?, ?, ?, ?, ?, ?)
-           ON CONFLICT(signature) DO UPDATE SET slot = excluded.slot, status = excluded.status`
-        )
-        .run(signature, currentSlot, "confirmed", null, raw.toString("base64"), nowIso());
+      recordSig(signature, bumpSlot(), raw.toString("base64"));
       return ok(id, signature);
     }
     case "getSignatureStatuses": {
       const [signatures] = (params as [string[]]) ?? [[]];
-      const db = getDb();
       const value = (signatures ?? []).map((signature) => {
-        const row = db
-          .prepare("SELECT slot, status, err FROM solana_mock_sigs WHERE signature = ?")
-          .get(signature) as { slot: number; status: string; err: string | null } | undefined;
+        const row = getStore().mockSigs[signature];
         if (!row) return null;
         return {
           slot: row.slot,
@@ -252,9 +253,7 @@ function handleMethod(method: string, params: unknown, id: unknown): RpcResponse
     }
     case "getTransaction": {
       const [signature] = (params as [string]) ?? [];
-      const row = getDb()
-        .prepare("SELECT slot, raw_tx FROM solana_mock_sigs WHERE signature = ?")
-        .get(signature) as { slot: number; raw_tx: string | null } | undefined;
+      const row = getStore().mockSigs[signature];
       if (!row) return ok(id, null);
       return ok(id, {
         slot: row.slot,

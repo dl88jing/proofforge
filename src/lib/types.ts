@@ -150,6 +150,9 @@ export type SettlementRecord = {
   slot: number | null;
   status: "pending" | "confirmed" | "failed";
   error: string | null;
+  explorer: string | null;
   createdAt: string;
   confirmedAt: string | null;
 };
+
+export type SettleMode = "mock" | "live";

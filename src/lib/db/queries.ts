@@ -1,4 +1,4 @@
-import { getDb, initDb, reloadDb } from "@/lib/db/client";
+import { getStore, touchStore } from "@/lib/store";
 import { nowIso } from "@/lib/ids";
 import type {
   EventKind,
@@ -10,113 +10,34 @@ import type {
   PublicProof,
   SettlementRecord,
 } from "@/lib/types";
+import type {
+  CreditRow,
+  EventRow,
+  MissionRow,
+  ProofPackRow,
+  ProofRunRow,
+  ReputationRow,
+  ReviewRow,
+  SettlementRow,
+} from "@/lib/store/types";
 
-initDb();
-
-export type MissionRow = {
-  id: string;
-  source_kind: string;
-  source_url: string;
-  source_owner: string | null;
-  source_repo: string | null;
-  source_number: number | null;
-  source_title: string | null;
-  source_body: string | null;
-  source_json: string;
-  title: string;
-  objective: string;
-  bounds_json: string;
-  acceptance_json: string;
-  reward_label: string | null;
-  status: MissionStatus;
-  policy_json: string;
-  created_at: string;
-  updated_at: string;
+export type {
+  CreditRow,
+  EventRow,
+  MissionRow,
+  ProofPackRow,
+  ProofRunRow,
+  ReputationRow,
+  ReviewRow,
+  SettlementRow,
 };
 
-export type ProofRunRow = {
-  id: string;
-  mission_id: string;
-  node_id: string;
-  operator: string;
-  started_at: string;
-  finished_at: string | null;
-  status: string;
-  commands_json: string;
-  logs: string;
-  artifacts_json: string;
-  env_json: string;
-};
+const byDesc = <T,>(key: keyof T) => (a: T, b: T) =>
+  String(b[key]).localeCompare(String(a[key]));
 
-export type ProofPackRow = {
-  id: string;
-  mission_id: string;
-  run_id: string;
-  schema_version: string;
-  digest: string;
-  pack_json: string;
-  public_json: string;
-  created_at: string;
-};
-
-export type ReviewRow = {
-  id: string;
-  mission_id: string;
-  pack_id: string;
-  reviewer: string;
-  decision: string;
-  note: string | null;
-  decided_at: string;
-};
-
-export type CreditRow = {
-  id: string;
-  mission_id: string;
-  pack_id: string;
-  contributor: string;
-  amount: number;
-  kind: string;
-  created_at: string;
-};
-
-export type ReputationRow = {
-  actor: string;
-  score: number;
-  accepted_count: number;
-  rejected_count: number;
-  settled_count: number;
-  updated_at: string;
-};
-
-export type EventRow = {
-  id: number;
-  seq: number;
-  kind: string;
-  mission_id: string | null;
-  payload_json: string;
-  prev_hash: string;
-  hash: string;
-  created_at: string;
-};
-
-export type SettlementRow = {
-  id: string;
-  mission_id: string;
-  pack_id: string;
-  cluster: string;
-  rpc_url: string;
-  payer_pubkey: string;
-  payee_pubkey: string;
-  lamports: number;
-  memo: string;
-  signature: string | null;
-  slot: number | null;
-  status: string;
-  tx_json: string | null;
-  error: string | null;
-  created_at: string;
-  confirmed_at: string | null;
-};
+function latestBy<T>(rows: T[], key: keyof T): T | undefined {
+  return [...rows].sort(byDesc<T>(key))[0];
+}
 
 export function insertMission(input: {
   id: string;
@@ -129,175 +50,110 @@ export function insertMission(input: {
   status: MissionStatus;
   policy: PolicyReport;
 }): MissionRow {
-  const db = getDb();
   const created = nowIso();
-  db.prepare(
-    `INSERT INTO missions (
-      id, source_kind, source_url, source_owner, source_repo, source_number,
-      source_title, source_body, source_json, title, objective, bounds_json,
-      acceptance_json, reward_label, status, policy_json, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-  ).run(
-    input.id,
-    input.source.kind,
-    input.source.url,
-    input.source.owner,
-    input.source.repo,
-    input.source.number,
-    input.source.title,
-    input.source.body,
-    JSON.stringify(input.source),
-    input.title,
-    input.objective,
-    JSON.stringify(input.bounds),
-    JSON.stringify(input.acceptance),
-    input.rewardLabel,
-    input.status,
-    JSON.stringify(input.policy),
-    created,
-    created
-  );
-  return getMission(input.id)!;
+  const row: MissionRow = {
+    id: input.id,
+    source_kind: input.source.kind,
+    source_url: input.source.url,
+    source_owner: input.source.owner,
+    source_repo: input.source.repo,
+    source_number: input.source.number,
+    source_title: input.source.title,
+    source_body: input.source.body,
+    source_json: JSON.stringify(input.source),
+    title: input.title,
+    objective: input.objective,
+    bounds_json: JSON.stringify(input.bounds),
+    acceptance_json: JSON.stringify(input.acceptance),
+    reward_label: input.rewardLabel,
+    status: input.status,
+    policy_json: JSON.stringify(input.policy),
+    created_at: created,
+    updated_at: created,
+  };
+  getStore().missions.push(row);
+  touchStore();
+  return row;
 }
 
 export function listMissions(): MissionRow[] {
-  return getDb()
-    .prepare("SELECT * FROM missions ORDER BY created_at DESC")
-    .all() as MissionRow[];
+  return [...getStore().missions].sort(byDesc<MissionRow>("created_at"));
 }
 
 export function getMission(id: string): MissionRow | undefined {
-  const read = () =>
-    getDb().prepare("SELECT * FROM missions WHERE id = ?").get(id) as MissionRow | undefined;
-  return read() ?? (reloadDb(), read());
+  return getStore().missions.find((row) => row.id === id);
 }
 
 export function updateMissionStatus(id: string, status: MissionStatus): void {
-  getDb()
-    .prepare("UPDATE missions SET status = ?, updated_at = ? WHERE id = ?")
-    .run(status, nowIso(), id);
+  const row = getMission(id);
+  if (!row) return;
+  row.status = status;
+  row.updated_at = nowIso();
+  touchStore();
 }
 
 export function insertProofRun(row: ProofRunRow): void {
-  getDb()
-    .prepare(
-      `INSERT INTO proof_runs (
-        id, mission_id, node_id, operator, started_at, finished_at, status,
-        commands_json, logs, artifacts_json, env_json
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    )
-    .run(
-      row.id,
-      row.mission_id,
-      row.node_id,
-      row.operator,
-      row.started_at,
-      row.finished_at,
-      row.status,
-      row.commands_json,
-      row.logs,
-      row.artifacts_json,
-      row.env_json
-    );
+  getStore().proofRuns.push(row);
+  touchStore();
 }
 
 export function latestRun(missionId: string): ProofRunRow | undefined {
-  return getDb()
-    .prepare(
-      "SELECT * FROM proof_runs WHERE mission_id = ? ORDER BY started_at DESC LIMIT 1"
-    )
-    .get(missionId) as ProofRunRow | undefined;
+  return latestBy(
+    getStore().proofRuns.filter((row) => row.mission_id === missionId),
+    "started_at"
+  );
 }
 
 export function insertProofPack(row: ProofPackRow): void {
-  getDb()
-    .prepare(
-      `INSERT INTO proof_packs (
-        id, mission_id, run_id, schema_version, digest, pack_json, public_json, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-    )
-    .run(
-      row.id,
-      row.mission_id,
-      row.run_id,
-      row.schema_version,
-      row.digest,
-      row.pack_json,
-      row.public_json,
-      row.created_at
-    );
+  getStore().proofPacks.push(row);
+  touchStore();
 }
 
 export function latestPack(missionId: string): ProofPackRow | undefined {
-  return getDb()
-    .prepare(
-      "SELECT * FROM proof_packs WHERE mission_id = ? ORDER BY created_at DESC LIMIT 1"
-    )
-    .get(missionId) as ProofPackRow | undefined;
+  return latestBy(
+    getStore().proofPacks.filter((row) => row.mission_id === missionId),
+    "created_at"
+  );
 }
 
 export function getPack(id: string): ProofPackRow | undefined {
-  const read = () =>
-    getDb().prepare("SELECT * FROM proof_packs WHERE id = ?").get(id) as ProofPackRow | undefined;
-  return read() ?? (reloadDb(), read());
+  return getStore().proofPacks.find((row) => row.id === id);
+}
+
+export function updatePackPublicJson(id: string, publicJson: string): void {
+  const row = getPack(id);
+  if (!row) return;
+  row.public_json = publicJson;
+  touchStore();
 }
 
 export function insertReview(row: ReviewRow): void {
-  getDb()
-    .prepare(
-      `INSERT INTO reviews (id, mission_id, pack_id, reviewer, decision, note, decided_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`
-    )
-    .run(
-      row.id,
-      row.mission_id,
-      row.pack_id,
-      row.reviewer,
-      row.decision,
-      row.note,
-      row.decided_at
-    );
+  getStore().reviews.push(row);
+  touchStore();
 }
 
 export function latestReview(missionId: string): ReviewRow | undefined {
-  return getDb()
-    .prepare(
-      "SELECT * FROM reviews WHERE mission_id = ? ORDER BY decided_at DESC LIMIT 1"
-    )
-    .get(missionId) as ReviewRow | undefined;
+  return latestBy(
+    getStore().reviews.filter((row) => row.mission_id === missionId),
+    "decided_at"
+  );
 }
 
 export function insertCredit(row: CreditRow): void {
-  getDb()
-    .prepare(
-      `INSERT INTO credits (id, mission_id, pack_id, contributor, amount, kind, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`
-    )
-    .run(
-      row.id,
-      row.mission_id,
-      row.pack_id,
-      row.contributor,
-      row.amount,
-      row.kind,
-      row.created_at
-    );
+  getStore().credits.push(row);
+  touchStore();
 }
 
 export function listCredits(): CreditRow[] {
-  return getDb()
-    .prepare("SELECT * FROM credits ORDER BY created_at DESC")
-    .all() as CreditRow[];
+  return [...getStore().credits].sort(byDesc<CreditRow>("created_at"));
 }
 
 export function upsertReputation(
   actor: string,
   patch: Partial<Pick<ReputationRow, "score" | "accepted_count" | "rejected_count" | "settled_count">>
 ): ReputationRow {
-  const db = getDb();
-  const existing = db.prepare("SELECT * FROM reputation WHERE actor = ?").get(actor) as
-    | ReputationRow
-    | undefined;
+  const store = getStore();
+  const existing = store.reputation.find((row) => row.actor === actor);
   const next: ReputationRow = {
     actor,
     score: (existing?.score ?? 0) + (patch.score ?? 0),
@@ -306,36 +162,21 @@ export function upsertReputation(
     settled_count: (existing?.settled_count ?? 0) + (patch.settled_count ?? 0),
     updated_at: nowIso(),
   };
-  db.prepare(
-    `INSERT INTO reputation (actor, score, accepted_count, rejected_count, settled_count, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?)
-     ON CONFLICT(actor) DO UPDATE SET
-       score = excluded.score,
-       accepted_count = excluded.accepted_count,
-       rejected_count = excluded.rejected_count,
-       settled_count = excluded.settled_count,
-       updated_at = excluded.updated_at`
-  ).run(
-    next.actor,
-    next.score,
-    next.accepted_count,
-    next.rejected_count,
-    next.settled_count,
-    next.updated_at
-  );
+  if (existing) Object.assign(existing, next);
+  else store.reputation.push(next);
+  touchStore();
   return next;
 }
 
 export function listReputation(): ReputationRow[] {
-  return getDb()
-    .prepare("SELECT * FROM reputation ORDER BY score DESC, actor ASC")
-    .all() as ReputationRow[];
+  return [...getStore().reputation].sort(
+    (a, b) => b.score - a.score || a.actor.localeCompare(b.actor)
+  );
 }
 
 export function latestEvent(): EventRow | undefined {
-  return getDb()
-    .prepare("SELECT * FROM events ORDER BY seq DESC LIMIT 1")
-    .get() as EventRow | undefined;
+  const events = getStore().events;
+  return events[events.length - 1];
 }
 
 export function insertEvent(row: {
@@ -346,98 +187,78 @@ export function insertEvent(row: {
   prevHash: string;
   hash: string;
 }): EventRow {
-  const created = nowIso();
-  getDb()
-    .prepare(
-      `INSERT INTO events (seq, kind, mission_id, payload_json, prev_hash, hash, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`
-    )
-    .run(row.seq, row.kind, row.missionId, row.payloadJson, row.prevHash, row.hash, created);
-  return getDb()
-    .prepare("SELECT * FROM events WHERE seq = ?")
-    .get(row.seq) as EventRow;
+  const event: EventRow = {
+    id: row.seq,
+    seq: row.seq,
+    kind: row.kind,
+    mission_id: row.missionId,
+    payload_json: row.payloadJson,
+    prev_hash: row.prevHash,
+    hash: row.hash,
+    created_at: nowIso(),
+  };
+  getStore().events.push(event);
+  touchStore();
+  return event;
 }
 
 export function listEvents(missionId?: string): EventRow[] {
-  const db = getDb();
-  if (missionId) {
-    return db
-      .prepare("SELECT * FROM events WHERE mission_id = ? ORDER BY seq ASC")
-      .all(missionId) as EventRow[];
-  }
-  return db.prepare("SELECT * FROM events ORDER BY seq ASC").all() as EventRow[];
+  const events = getStore().events;
+  return missionId ? events.filter((event) => event.mission_id === missionId) : [...events];
 }
 
 export function insertSettlement(row: SettlementRow): void {
-  getDb()
-    .prepare(
-      `INSERT INTO settlements (
-        id, mission_id, pack_id, cluster, rpc_url, payer_pubkey, payee_pubkey,
-        lamports, memo, signature, slot, status, tx_json, error, created_at, confirmed_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    )
-    .run(
-      row.id,
-      row.mission_id,
-      row.pack_id,
-      row.cluster,
-      row.rpc_url,
-      row.payer_pubkey,
-      row.payee_pubkey,
-      row.lamports,
-      row.memo,
-      row.signature,
-      row.slot,
-      row.status,
-      row.tx_json,
-      row.error,
-      row.created_at,
-      row.confirmed_at
-    );
+  getStore().settlements.push(row);
+  touchStore();
 }
 
 export function updateSettlement(
   id: string,
   patch: Partial<
-    Pick<SettlementRow, "signature" | "slot" | "status" | "tx_json" | "error" | "confirmed_at">
+    Pick<
+      SettlementRow,
+      | "signature"
+      | "slot"
+      | "status"
+      | "tx_json"
+      | "error"
+      | "confirmed_at"
+      | "cluster"
+      | "rpc_url"
+      | "payer_pubkey"
+      | "payee_pubkey"
+      | "lamports"
+    >
   >
 ): void {
   const current = getSettlement(id);
   if (!current) return;
-  getDb()
-    .prepare(
-      `UPDATE settlements SET signature = ?, slot = ?, status = ?, tx_json = ?, error = ?, confirmed_at = ?
-       WHERE id = ?`
-    )
-    .run(
-      patch.signature ?? current.signature,
-      patch.slot ?? current.slot,
-      patch.status ?? current.status,
-      patch.tx_json ?? current.tx_json,
-      patch.error ?? current.error,
-      patch.confirmed_at ?? current.confirmed_at,
-      id
-    );
+  for (const [key, value] of Object.entries(patch)) {
+    if (value !== undefined) (current as Record<string, unknown>)[key] = value;
+  }
+  touchStore();
 }
 
 export function getSettlement(id: string): SettlementRow | undefined {
-  return getDb().prepare("SELECT * FROM settlements WHERE id = ?").get(id) as
-    | SettlementRow
-    | undefined;
+  return getStore().settlements.find((row) => row.id === id);
 }
 
 export function latestSettlement(missionId: string): SettlementRow | undefined {
-  return getDb()
-    .prepare(
-      "SELECT * FROM settlements WHERE mission_id = ? ORDER BY created_at DESC LIMIT 1"
-    )
-    .get(missionId) as SettlementRow | undefined;
+  return latestBy(
+    getStore().settlements.filter((row) => row.mission_id === missionId),
+    "created_at"
+  );
+}
+
+export function settlementForPack(packId: string): SettlementRow | undefined {
+  return latestBy(
+    getStore().settlements.filter((row) => row.pack_id === packId && row.status === "confirmed"),
+    "created_at"
+  );
 }
 
 export function listSettlements(): SettlementRow[] {
-  return getDb()
-    .prepare("SELECT * FROM settlements ORDER BY created_at DESC")
-    .all() as SettlementRow[];
+  return [...getStore().settlements].sort(byDesc<SettlementRow>("created_at"));
 }
 
 export function parseMission(row: MissionRow) {
@@ -461,6 +282,14 @@ export function parsePack(row: ProofPackRow): {
 }
 
 export function toSettlementRecord(row: SettlementRow): SettlementRecord {
+  let explorer: string | null = null;
+  if (row.tx_json) {
+    try {
+      explorer = (JSON.parse(row.tx_json) as { explorer?: string | null }).explorer ?? null;
+    } catch {
+      explorer = null;
+    }
+  }
   return {
     id: row.id,
     missionId: row.mission_id,
@@ -475,6 +304,7 @@ export function toSettlementRecord(row: SettlementRow): SettlementRecord {
     slot: row.slot,
     status: row.status as SettlementRecord["status"],
     error: row.error,
+    explorer,
     createdAt: row.created_at,
     confirmedAt: row.confirmed_at,
   };

@@ -3,15 +3,18 @@
   "version": "0.1.0",
   "private": true,
   "license": "MIT",
-  "description": "Northbridge ProofForge — mission intake, proof node, verifier, Proof Pack, human accept, Solana settle.",
+  "description": "Northbridge ProofForge \u2014 mission intake, proof node, verifier, Proof Pack, human accept, Solana settle.",
   "scripts": {
     "dev": "next dev --hostname 127.0.0.1 --port 43173",
     "build": "next build",
     "start": "next start --hostname 127.0.0.1 --port 43173",
     "lint": "eslint",
     "demo": "tsx --tsconfig tsconfig.json scripts/demo-loop.ts",
-    "db:init": "tsx --tsconfig tsconfig.json scripts/init-db.ts",
-    "db:migrate": "tsx --tsconfig tsconfig.json scripts/migrate.ts"
+    "db:init": "tsx --tsconfig tsconfig.json scripts/reset-store.ts",
+    "demo:reset": "tsx --tsconfig tsconfig.json scripts/reset-store.ts",
+    "demo:live": "tsx --tsconfig tsconfig.json scripts/demo-loop.ts --live",
+    "devnet:setup": "tsx --tsconfig tsconfig.json scripts/devnet-setup.ts",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@base-ui/react": "^1.8.0",
@@ -39,5 +42,8 @@
     "eslint-config-next": "16.3.8",
     "tailwindcss": "^4",
     "typescript": "^5"
+  },
+  "engines": {
+    "node": ">=20"
   }
 }

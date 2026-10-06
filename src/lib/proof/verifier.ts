@@ -52,11 +52,11 @@ export function verifyRun(input: {
   const required = ["source.json", "policy.json", "checklist.md", "hashes.json", "env.json"];
   for (const name of required) {
     const recorded = input.artifacts.find((artifact) => artifact.name === name);
-    const filePath = recorded?.path ?? path.join(dir, name);
-    const exists = existsSync(filePath);
+    const filePath = recorded?.path ?? path.join(/*turbopackIgnore: true*/ dir, name);
+    const exists = existsSync(/*turbopackIgnore: true*/ filePath);
     let hashOk = false;
     if (exists && recorded) {
-      const buf = readFileSync(filePath);
+      const buf = readFileSync(/*turbopackIgnore: true*/ filePath);
       hashOk = sha256Hex(buf) === recorded.sha256;
     }
     checks.push(
@@ -68,9 +68,9 @@ export function verifyRun(input: {
     );
   }
 
-  const hashesPath = path.join(dir, "hashes.json");
-  if (existsSync(hashesPath)) {
-    const hashes = JSON.parse(readFileSync(hashesPath, "utf8")) as {
+  const hashesPath = path.join(/*turbopackIgnore: true*/ dir, "hashes.json");
+  if (existsSync(/*turbopackIgnore: true*/ hashesPath)) {
+    const hashes = JSON.parse(readFileSync(/*turbopackIgnore: true*/ hashesPath, "utf8")) as {
       sourceDigest?: string;
     };
     checks.push(
