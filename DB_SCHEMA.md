@@ -1,149 +1,29 @@
-# Northbridge ProofForge database
+# Northbridge ProofForge state store
 
-SQLite file: `data/proofforge.db` (gitignored). Created on first run by `src/lib/db/init` via `src/lib/db/client.ts` loading `src/lib/db/schema.sql`.
+ProofForge keeps all household state in **one JSON document** (`northbridge.store.v2`, `src/lib/store/types.ts`). There is no native database dependency, so the same build runs locally, in the CLI, and on serverless.
 
-Fresh installs: `npm run db:init` (or just start the app / `npm run demo`).
-
-Schema changes: update `src/lib/db/schema.sql` **and** add a version in `scripts/migrate.ts`, then run `npm run db:migrate`.
-
-Current version: **1**.
-
-## tables
-
-### schema_migrations
-| column | type | notes |
+| Backend | When | Where |
 | --- | --- | --- |
-| version | INTEGER PK | applied migration |
-| applied_at | TEXT | ISO timestamp |
+| `file` | default locally | `data/proofforge.json` (override `PROOFFORGE_STORE_PATH`) — atomic write-through |
+| `memory` | default on Vercel without Redis | process memory (per-instance, demo only) |
+| `redis` | auto when `UPSTASH_REDIS_REST_URL`/`TOKEN` (or `KV_REST_API_*`) are set | key `northbridge:proofforge:store` (override `PROOFFORGE_STORE_KEY`) |
 
-### missions
-Bounded source-backed work.
+Force one with `PROOFFORGE_STORE=file|memory|redis`. Request handlers call `hydrateStore()` before reading and `flushStore()` after writing (`withStore()`); every mutation bumps `revision`, and a newer remote revision always wins. `npm run db:init` / `npm run demo:reset` wipe state.
 
-| column | type | notes |
+## Collections
+
+| Key | Row type | Notes |
 | --- | --- | --- |
-| id | TEXT PK | `msn_…` |
-| source_kind | TEXT | `github_issue` \| `bounty_url` |
-| source_url | TEXT | canonical URL |
-| source_owner | TEXT | GitHub owner |
-| source_repo | TEXT | GitHub repo |
-| source_number | INTEGER | issue number |
-| source_title | TEXT | raw title |
-| source_body | TEXT | raw body |
-| source_json | TEXT | `GithubSource` JSON |
-| title | TEXT | bounded title |
-| objective | TEXT | first-paragraph or derived |
-| bounds_json | TEXT | `MissionBounds` |
-| acceptance_json | TEXT | string[] |
-| reward_label | TEXT | parsed bounty / household credit |
-| status | TEXT | bounded → running → packed → submitted → accepted → settled |
-| policy_json | TEXT | `PolicyReport` |
-| created_at | TEXT | ISO |
-| updated_at | TEXT | ISO |
+| `missions` | `MissionRow` | `msn_…`, source snapshot JSON, bounds, acceptance, policy, `status` (`bounded → running → packed → submitted → accepted/rejected → settled`, or `failed`) |
+| `proofRuns` | `ProofRunRow` | `run_…`, operator Morgan, commands, logs, artifact hashes, env |
+| `proofPacks` | `ProofPackRow` | `pack_…`, `digest` = `sha256:` of canonical pack JSON, full `pack_json` + sanitized `public_json` |
+| `reviews` | `ReviewRow` | Avery's accept / reject + note |
+| `credits` | `CreditRow` | +25 accepted-proof credit to Morgan, only on accept |
+| `reputation` | `ReputationRow` | Morgan, Avery, proof node: score, accepted / rejected / settled counts |
+| `settlements` | `SettlementRow` | cluster (`mock`/`devnet`/…), RPC URL, payer, payee, lamports, memo, signature, slot, status, tx JSON (explorer link, serialized tx) |
+| `events` | `EventRow` | hash-linked chain: `hash = sha256(canonical{seq, kind, missionId, payload, prevHash})`, genesis `sha256:northbridge-proof-genesis` |
+| `mockAccounts` | `pubkey → lamports` | mock cluster balances |
+| `mockSigs` | `signature → {slot, status, raw_tx}` | mock cluster ledger; raw tx is what on-chain verification decodes |
+| `mockMeta` | `k → v` | mock slot, blockhash, lastValidBlockHeight |
 
-### proof_runs
-Local proof node executions.
-
-| column | type | notes |
-| --- | --- | --- |
-| id | TEXT PK | `run_…` |
-| mission_id | TEXT FK | missions.id |
-| node_id | TEXT | `northbridge-forge-1` |
-| operator | TEXT | Morgan |
-| started_at | TEXT | |
-| finished_at | TEXT | |
-| status | TEXT | passed \| failed |
-| commands_json | TEXT | command results |
-| logs | TEXT | plain log |
-| artifacts_json | TEXT | hashed files |
-| env_json | TEXT | node/platform |
-
-### proof_packs
-Sealed evidence packets.
-
-| column | type | notes |
-| --- | --- | --- |
-| id | TEXT PK | `pack_…` |
-| mission_id | TEXT FK | |
-| run_id | TEXT FK | |
-| schema_version | TEXT | `northbridge.proofpack.v1` |
-| digest | TEXT | canonical SHA-256 |
-| pack_json | TEXT | full pack |
-| public_json | TEXT | sanitized public proof |
-| created_at | TEXT | |
-
-### reviews
-Human accept gate.
-
-| column | type | notes |
-| --- | --- | --- |
-| id | TEXT PK | `rev_…` |
-| mission_id | TEXT FK | |
-| pack_id | TEXT FK | |
-| reviewer | TEXT | Avery |
-| decision | TEXT | accept \| reject |
-| note | TEXT | |
-| decided_at | TEXT | |
-
-### credits
-Granted only after accept.
-
-| column | type | notes |
-| --- | --- | --- |
-| id | TEXT PK | `crd_…` |
-| mission_id | TEXT FK | |
-| pack_id | TEXT FK | |
-| contributor | TEXT | Morgan |
-| amount | INTEGER | reputation units |
-| kind | TEXT | `accepted_proof` |
-| created_at | TEXT | |
-
-### reputation
-Rolled-up household scores.
-
-| column | type | notes |
-| --- | --- | --- |
-| actor | TEXT PK | Avery, Morgan, node id |
-| score | INTEGER | |
-| accepted_count | INTEGER | |
-| rejected_count | INTEGER | |
-| settled_count | INTEGER | |
-| updated_at | TEXT | |
-
-### settlements
-Real Solana transfer+memo (mock or public RPC).
-
-| column | type | notes |
-| --- | --- | --- |
-| id | TEXT PK | `stl_…` |
-| mission_id | TEXT FK | |
-| pack_id | TEXT FK | |
-| cluster | TEXT | mock \| devnet \| testnet |
-| rpc_url | TEXT | |
-| payer_pubkey | TEXT | |
-| payee_pubkey | TEXT | |
-| lamports | INTEGER | |
-| memo | TEXT | `northbridge:<digest>` |
-| signature | TEXT | base58 |
-| slot | INTEGER | |
-| status | TEXT | pending \| confirmed \| failed |
-| tx_json | TEXT | serialized tx metadata |
-| error | TEXT | |
-| created_at | TEXT | |
-| confirmed_at | TEXT | |
-
-### events
-Hash-linked household log (`hash = sha256(canonical(seq, kind, payload, prevHash))`).
-
-| column | type | notes |
-| --- | --- | --- |
-| id | INTEGER PK | auto |
-| seq | INTEGER UNIQUE | monotonic |
-| kind | TEXT | event kind |
-| mission_id | TEXT | |
-| payload_json | TEXT | |
-| prev_hash | TEXT | |
-| hash | TEXT | |
-| created_at | TEXT | |
-
-### solana_mock_accounts / solana_mock_sigs / solana_mock_meta
-In-process mock validator state used when `SOLANA_CLUSTER=mock`.
+Event kinds: `source.imported`, `mission.bounded`, `proof.ran`, `proof.verified`, `pack.created`, `pack.submitted`, `review.accepted`, `review.rejected`, `credit.granted`, `settle.submitted`, `settle.confirmed`, `settle.failed`.
